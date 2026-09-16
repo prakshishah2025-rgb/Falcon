@@ -2,6 +2,63 @@ import { HOMES, WEATHER, GRID_PRICES, APPLIANCES, COMPUTE_NODES, COMPUTE_JOBS, H
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+type HomeStatus = Home & {
+  dailyGeneration: number;
+  surplusKwh: number;
+  needKwh: number;
+  role: "seller" | "buyer";
+  computeNode: ComputeNode | undefined;
+  computeLimitKw: number;
+};
+
+type MarketSeller = HomeStatus & {
+  available: number;
+};
+
+type MarketBuyer = HomeStatus & {
+  demand: number;
+};
+
+export type MarketMatch = {
+  seller: string;
+  buyer: string;
+  kwh: number;
+  price: number;
+  distance: number;
+  buyerSavings: number;
+  sellerEarnings: number;
+};
+
+type ApplianceOption = {
+  start: number;
+  score: number;
+  solarScore: number;
+  priceScore: number;
+};
+
+type ComputeOption = {
+  node: ComputeNode;
+  home: HomeStatus;
+  start: number;
+  score: number;
+  cleanScore: number;
+  priceScore: number;
+  computeKwNeeded: number;
+  homeDemandPeak: boolean;
+};
+
+export type ComputeSchedule = ComputeJob & {
+  nodeName: string;
+  homeName: string;
+  startHour: number;
+  endHour: number;
+  action: string;
+  cleanShare: number;
+  hostIncome: number;
+  netReward: number;
+  protectedKw: number;
+};
+
 export const rupees = (value: number) => `₹${Math.round(value).toLocaleString("en-IN")}`;
 
 export function getHourLabel(hour: number): string {
@@ -56,7 +113,7 @@ function getProtectionLimit(mode: string) {
   return 0.68;
 }
 
-export function calculateHomeStatus(dayOffset = 0, gridAlert = false) {
+export function calculateHomeStatus(dayOffset = 0, gridAlert = false): HomeStatus[] {
   return HOMES.map((home) => {
     const forecast = forecastForHome(home, dayOffset);
     const dailyGeneration = forecast.reduce((sum, hour) => sum + hour.generation, 0);
@@ -77,7 +134,7 @@ export function calculateHomeStatus(dayOffset = 0, gridAlert = false) {
   });
 }
 
-export function matchMarket(dayOffset = 0, gridAlert = false) {
+export function matchMarket(dayOffset = 0, gridAlert = false): MarketMatch[] {
   const status = calculateHomeStatus(dayOffset, gridAlert);
   const sellers = status
     .filter((home) => home.role === "seller")
@@ -88,7 +145,7 @@ export function matchMarket(dayOffset = 0, gridAlert = false) {
   const nonSolarReserve = buyers.filter((home) => home.solarKw < 1).length * 1.2;
   let fairnessReserve = gridAlert ? nonSolarReserve * 1.25 : nonSolarReserve;
 
-  const matches = [];
+  const matches: MarketMatch[] = [];
 
   buyers.forEach((buyer) => {
     sellers
@@ -129,7 +186,7 @@ export function matchMarket(dayOffset = 0, gridAlert = false) {
 export function optimizeAppliances(dayOffset = 0, gridAlert = false) {
   const forecast = neighborhoodForecast(dayOffset);
   return APPLIANCES.map((load) => {
-    const options = [];
+    const options: ApplianceOption[] = [];
     for (let start = 6; start <= load.deadline - load.durationHours; start += 1) {
       const window = forecast.slice(start, start + load.durationHours);
       const solarScore = window.reduce((sum, hour) => sum + hour.surplus, 0) / load.durationHours;
@@ -153,16 +210,18 @@ export function optimizeAppliances(dayOffset = 0, gridAlert = false) {
   });
 }
 
-export function scheduleCompute(dayOffset = 0, gridAlert = false) {
+export function scheduleCompute(dayOffset = 0, gridAlert = false): ComputeSchedule[] {
   const forecast = neighborhoodForecast(dayOffset);
   const status = calculateHomeStatus(dayOffset, gridAlert);
-  const schedules = [];
+  const schedules: ComputeSchedule[] = [];
 
   COMPUTE_JOBS.forEach((job) => {
-    const options = [];
+    const options: ComputeOption[] = [];
 
     COMPUTE_NODES.forEach((node) => {
       const home = status.find((item) => item.id === node.homeId);
+      if (!home) return;
+
       for (let start = 0; start <= job.deadline - job.durationHours; start += 1) {
         const window = forecast.slice(start, start + job.durationHours);
         const homeDemandPeak = start >= 17 && start <= 21;
